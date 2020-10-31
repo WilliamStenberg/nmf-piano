@@ -1,0 +1,53 @@
+\documentclass[a4paper,10pt]{scrartcl}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\usepackage{dsfont}
+\usepackage{amsfonts}
+\usepackage{amsthm}
+\usepackage{graphicx}
+\usepackage[small,nooneline,bf,hang]{caption2}
+\usepackage{float}
+\usepackage{hyperref}
+
+%opening
+\title{Usage of NNMF C-Library 1.02}
+
+
+
+\begin{document}
+
+\fancyhead{}
+\rhead{Usage}
+\lhead{NNMF C-Library 1.02}
+
+
+\maketitle
+
+
+	\section{Building the library}
+
+	The library can be build via the provided makefile, which by default uses the ``gcc'' compiler.\newline\newline
+	The target \emph{lib} builds the static library and target \emph{shared} builds the shared library.
+	By default the makefile compiles without the compiler flag \emph{-fPIC} (position independent code) which is
+	needed for generating the shared library.\newline\newline
+	Optionally one could alter compiler flags in the makefile before building the library.
+
+	\section{Linking the library}
+
+	Linking the library requires linking of ARPACK, BLAS and LAPACK libraries as well.
+
+	\section{Usage}
+
+	This library can be used by either calling \emph{nmfDriver} or the individual computational routines for
+	a non negative matrix factorization.\newline
+
+	An example call for the first case can be found in the file ``example.c''.\newline
+
+	An example call for the second case can be found in the file ``example\_withoutdriver.c''\newline
+
+	
+
+	
+\end{document}

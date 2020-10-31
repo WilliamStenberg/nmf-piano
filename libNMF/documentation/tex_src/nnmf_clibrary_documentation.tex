@@ -1,0 +1,714 @@
+\documentclass[a4paper,10pt]{scrartcl}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\usepackage{dsfont}
+\usepackage{amsfonts}
+\usepackage{amsthm}
+\usepackage{graphicx}
+\usepackage[small,nooneline,bf,hang]{caption2}
+\usepackage{float}
+\usepackage{hyperref}
+
+%opening
+\title{Non Negative Matrix Factorization C-Library 1.02}
+
+
+
+\begin{document}
+
+\fancyhead{}
+\rhead{Documentation}
+\lhead{NNMF C-Library 1.02}
+
+
+\maketitle
+
+
+	\begin{abstract}
+		This document describes the functionality and outlines implementation steps for every major function
+		in this	library. For details on calling these functions see the according source files.
+	\end{abstract}
+
+\tableofcontents
+\pagebreak
+
+	\section{General notes}
+
+	Throughout this library matrices are stored in one-dimensional arrays. To simplify the use of fortran high performance
+	routines these arrays are logically accessed in column-major order, which is how fortran stores 
+	two-dimensional arrays.\newline
+
+	The libnmf utilizes routines from BLAS, LAPACK and one of the availabe iterative SVD libraries. In the following lines
+	I will shortly discuss our experiences with different versions of these libraries.
+
+	\emph{BLAS} - we tested \emph{ATLAS}- (version 3.8.3 and development version 3.9.11) and \emph{GOTO}-BLAS (version 1.26). Overall GOTO-BLAS seemed to be faster,
+	setting an emphasis on parallel performance. ATLAS-BLAS seemed to utilize cpu cores considerably less, which improved in
+	the newer version (which features a new multithreading-implementation). There also seems to be an impact of BLAS versions on runtime stability
+	per iteration (see \emph{Known Issues}).
+
+	\emph{ARPACK} - we tested \emph{PROPACK} and \emph{ARPACK} for calculation of the singular value decomposition in
+	matrix generation by \emph{NNDSVD}. While both ran fine for smaller sized problems, PROPACK had convergence issues
+	with bigger Problems and therefore utilize ARPACK now.
+
+	\subsection{Known Issues}
+
+	The number of small positive (in the order of machine precision) and zero entries increase in the course of several iterations
+	which increased the computational time per iteration in performance tests as well.
+	Therefore small positive entries are set to zero in every iteration. The according threshold \texttt{ZERO\_THRESHOLD} can be set in the header file \texttt{common.h}; if not set the machine precision (as returned by BLAS routine \texttt{DLAMCH}) is used by default.
+	Additionaly in function \texttt{nmf\_mu} the factor \texttt{DIV\_BY\_ZERO\_AVOIDANCE} is defined with a default value of $10^{-9}$. This factor is added to the divisor in an elementwise calculation to avoid division by zero and division by a very small number (close to machine precision). The latter case would result in a slowdown of iterations in the course of several iterations.
+
+	In function \texttt{nmf\_mu} an increasing number of zero entries slowed down the computation as well. Performance tests showed that a relatively
+	constant runtime per iteration could be achieved by zero-comparison of relevant entries prior to the computation; in case of a zero the result is then directly set to zero.	
+	
+
+	\section{Driver routines} 	
+
+		\subsection{nmfDriver}
+
+			\paragraph{Purpose}
+
+					The \emph{nmfDriver} routine calculates a non negative matrix factorisation
+					of a m by n matrix A
+ 	
+					\begin{equation*}
+ 					A = W * H
+					\end{equation*} 
+
+ 					where A, W and H are non-negative matrices.
+
+					W is a m by k matrix
+
+ 					H is a k by n matrix
+
+ 					k is the approximation factor\newline
+
+
+					It takes care of everything needed for several runs of
+					factorizations, finally storing the best result in a file.\newline
+ 		
+			\paragraph{Used BLAS/LAPACK routines}
+
+					\begin{tabular}{lcl}
+						Not directly used && \\
+					\end{tabular}
+
+			\paragraph{Implementation outline}
+			
+
+					This routine first of checks the arguments passed in the call and sets
+					default options if needed.
+					It then loads a matrix A (format as stated in \emph{loadMatrix} and
+					 \emph{storeMatrix}) and optionally initial factor matrices W0 and H0 (if 
+					not loaded they get initialised with random numbers).
+					\newline
+
+
+
+					For every repetition the computational routine according to the chosen
+					factorization method is called and the factor matrices get re-initialized
+					afterwards. The best result - in terms of root mean
+					square residual - is normalized and resorted according to the length of
+					row vectors of matrix H.
+					\newline
+
+
+					Implemented algorithms to actually compute the factorization are (for 
+					details see each algorithm):
+ 					\newline
+
+
+					\begin{tabular}{lcl}
+ 					nmf\_mu	&& multiplicative update approach\\
+ 					nmf\_als && alternating least squares approach\\
+ 					nmf\_neals && normal equation alternating least squares approach\\
+ 					nmf\_alspg && alternating least squares using a projected 
+							gradient method\\
+					nmf\_pg && direct projected gradient approach\\
+					\end{tabular}
+
+			
+	
+
+
+	\section{Computational routines}
+
+
+		\subsection{nmf\_mu}
+
+			\paragraph{Purpose}
+
+					This routine calculates a non negative matrix factorisation of a m by n 
+					matrix A\newline
+					
+					\begin{equation*}
+						A = W * H
+					\end{equation*}
+
+ 					where A, W and H are non-negative matrices.
+
+ 					W is a m by k matrix
+
+ 					H is a k by n matrix
+
+ 					k is the approximation factor
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+					The following routines are called\newline
+
+					\begin{tabular}{lcl}
+						DGEMM && for matrix-matrix multiplications\\
+						DLAMCH && for calculationg machine precision
+					\end{tabular}
+					
+			\paragraph{Implementation outline}
+
+					In every factorization step each new factor matrix gets calculated by
+					three DGEMM matrix-matrix multiplications and one elementwise calculation
+					in a simple for-loop.\newline
+
+					Factor matrix H gets calculated first and in the following way:\newline
+
+					\begin{equation*}
+						H_{n+1} = \dfrac{H_{n} \cdot (W_{n}^t * A)}{(W_n^t * W_n)* H_n + eps)} 
+					\end{equation*}
+
+					Each Matrix-Matrix Multiplication ($*$) is calculated by a DGEMM call and
+					all elementwise operations ($\cdot$, $+$ and the fraction) are calculated
+					in a for-loop.\newline
+
+					Factor matrix W is caculated according to following equation:\newline
+					
+					\begin{equation*}
+						W_{n+1} = \dfrac{W_{n} \cdot (A * H_{n+1}^t)}{W_n * (H_{n+1}* H_{n+1}^t) + eps}
+					\end{equation*}
+
+
+					As a stopping criterion the root mean square residual and the maximum 
+					change in the factor matrices is then calculated in every iteration (see
+					functions \emph{calculateNorm} and \emph{calculateMaxchange}).\newline
+
+
+
+		\subsection{nmf\_mu\_singleprec}
+
+			\paragraph{Purpose}
+
+					This routine is a single precision version of \emph{nmf\_mu}, using the single
+					precision version of BLAS and LAPACK routines.
+
+
+
+		\subsection{nmf\_als}
+
+			\paragraph{Purpose}
+
+					This routine calculates a non negative matrix factorisation of a m by n 
+					matrix A\newline
+					
+					\begin{equation*}
+						A = W * H
+					\end{equation*}
+
+ 					where A, W and H are non-negative matrices.
+
+ 					W is a m by k matrix
+
+ 					H is a k by n matrix
+
+ 					k is the approximation factor
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+					The following routines are called\newline
+
+					\begin{tabular}{lcl}
+						DGEQP3 && for performing a QR-factorization with column pivoting\\
+						DORGQR && for generating an economy sized explicit Q\\
+						DGEMM  && for matrix matrix multiplications\\
+						DTRTRS && for solving a triangular system\\
+						DLACPY && for copying a matrix to another matrix\\
+						DCOPY  && for copying a vector to another vector\\
+						DLAMCH && for calculationg machine precision
+					\end{tabular}
+
+			\paragraph{Implementation outline}
+
+
+					Since the matrices A and W get overwritten during some of the calculations,
+					at the beginning of every iteration step they get copied to help variables.
+					\newline
+
+					For calculation of H the following steps are performed:\newline
+
+					\begin{itemize}
+					 \item QR-factorization with column pivoting of $W$ (m x k) (DGEQP3)\newline
+					 \item Copying R (k x k) out of resulting matrix (DLACPY)\newline
+					 \item Calculate economy sized explicit $Q$ (m x k) (DORGQR)\newline
+					 \item Calculate $Qh = Q^t * A$ (DGEMM)\newline
+					 \item Solve $R * x = Qh$ (DTRTRS)\newline
+					 \item Permutate result according to the pivoting of the factorization 
+						(DCOPY) and set negative entries to zero\newline
+					\end{itemize}
+
+
+					Before the calculation of W begins, matrix A and H are copied and 
+					transposed to help variables and then the following steps are 
+					performed:\newline
+					
+					\begin{itemize}
+					 \item QR-factorization with column pivoting of $H^t$ (n x k) (DGEQP3)\newline
+					 \item Copying R (k x k) out of resulting matrix (DLACPY)\newline
+					 \item Calculate economy sized explicit $Q$ (n x k) (DORGQR)\newline	
+					 \item Calculate $Qw = Q^t * A^t$ (DGEMM)\newline
+					 \item Solve $R * x = Qw$ (DTRTRS)\newline
+					 \item Permutate and transpose result according to the pivoting of the 
+						factorization (DCOPY) and set negative entries to zero\newline
+					\end{itemize}
+
+
+
+					As a stopping criterion the root mean square residual and the maximum 
+					change in the factor matrices is then calculated in every iteration (see
+					functions \emph{calculateNorm} and \emph{calculateMaxchange}).\newline
+
+
+
+		\subsection{nmf\_neals}
+
+			\paragraph{Purpose}
+
+					This routine calculates a non negative matrix factorisation of a m by n 
+					matrix A\newline
+					
+					\begin{equation*}
+						A = W * H
+					\end{equation*}
+
+ 					where A, W and H are non-negative matrices.
+
+ 					W is a m by k matrix
+
+ 					H is a k by n matrix
+
+ 					k is the approximation factor
+
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+					The following routines are called\newline
+
+					\begin{tabular}{lcl}
+						DGEMM && for matrix-matrix multiplications\\
+						DGESV && for solving a system of lin. equations using a 
+							LU-factorization\\
+						DLAMCH && for calculationg machine precision
+					\end{tabular}
+
+			\paragraph{Implementation outline}
+
+
+					For calculation of H the following steps are performed:\newline
+
+					\begin{itemize}
+					 \item Calculating of $help1 = W^t * W$ (DGEMM)\newline
+					 \item Calculating of $help2 = W^t * A$ (DGEMM)\newline
+					 \item Solving $help1 * x = help2$ using LU-factorization (DGESV)\newline
+					 \item Set negative matrix entries to zero (loop)\newline
+					\end{itemize}
+
+
+					For calculation of W the following steps are performed:\newline
+					
+					\begin{itemize}
+					 \item Calculating of $help1 = H * H^t$ (DGEMM)\newline
+					 \item Calculating of $help3 = H * A^t$ (DGEMM)\newline
+					 \item Solving $help1 * x = help3$ using LU-factorization (DGESV)\newline
+					 \item Transpose the result (DCOPY) and set negative matrix entries to 
+						zero (loop)\newline
+					\end{itemize}
+
+
+
+					As a stopping criterion the root mean square residual and the maximum 
+					change in the factor matrices is then calculated in every iteration (see
+					functions \emph{calculateNorm} and \emph{calculateMaxchange}).\newline
+
+			\paragraph{Notes}
+
+
+					While Matlab computes the condition when using a LU-factorization this code
+					skips this step since there already is a convergence check every iteration.
+
+		\subsection{nmf\_alspg}
+
+			\paragraph{Purpose}
+
+					This routine calculates a non negative matrix factorisation of a m by n 
+					matrix A\newline
+					
+					\begin{equation*}
+						A = W * H
+					\end{equation*}
+
+ 					where A, W and H are non-negative matrices.
+
+ 					W is a m by k matrix
+
+ 					H is a k by n matrix
+
+ 					k is the approximation factor
+
+
+			\paragraph{Used BLAS/LAPACK routines}
+	
+					The following routines are called\newline
+
+					\begin{tabular}{lcl}
+						DGEMM && for matrix-matrix multiplications\\
+						DCOPY && for transposing matrices\\
+						DLANGE && for calculating the frobenius norm\\
+					\end{tabular}
+
+			\paragraph{Implementation outline}
+
+
+					Before the iterations begin the initial gradients get calculated as 
+					follows: (three times DGEMM each)\newline
+
+					\begin{equation*}
+						gradw = W * H * H^t - A * H^t
+					\end{equation*}
+					
+					\begin{equation*}
+						gradh = W^t * W * H - W^t * A
+					\end{equation*}
+
+					Additionally the initial gradient norm is calculated (DLANGE), wich
+					serves as a stopping condition.\newline
+
+					In every iteration first the new projection norm is calculated. (In 
+					Matlab-Notation: $norm([gradW(gradW <0 | W > 0); gradH(gradH <0 | H > 0)])$)\newline
+
+					For calculation of W the following steps are performed:\newline
+
+					\begin{itemize}
+					 \item Transposing matrices W and H (DCOPY)\newline
+					 \item Solving the subproblem for $A^t, H^t, W^t$ (see 	
+						\emph{pg\_subprob})\newline
+					 \item Transposing W and gradW\newline
+					\end{itemize}
+
+
+					For calculation of H the following steps are performed:\newline
+					
+					\begin{itemize}
+					 \item Solving the subproblem for $A, W, H$ (see \emph{pg\_subprob})\newline
+					\end{itemize}
+
+
+					As the final step for every iteration the root mean square residual is
+					calculated.
+
+
+		\subsection{nmf\_pg}
+
+			\paragraph{Purpose}
+
+					This routine calculates a non negative matrix factorisation of a m by n 
+					matrix A\newline
+					
+					\begin{equation*}
+						A = W * H
+					\end{equation*}
+
+ 					where A, W and H are non-negative matrices.
+
+ 					W is a m by k matrix
+
+ 					H is a k by n matrix
+
+ 					k is the approximation factor
+
+
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+					The following routines are called\newline
+
+					\begin{tabular}{lcl}
+						DGEMM && for matrix-matrix multiplications\\
+						DCOPY && for transposing matrices\\
+						DLANGE && for calculating the frobenius norm\\
+						DLACPY && for copying matrices\\
+						DAXPY && for calculating y = a*x + y\\
+					\end{tabular}
+
+			\paragraph{Implementation outline}
+
+
+					In every iteration first the initial gradients get calculated as 
+					follows: (three times DGEMM each)\newline
+
+					\begin{equation*}
+						gradw = W * H * H^t - A * H^t
+					\end{equation*}
+					
+					\begin{equation*}
+						gradh = W^t * W * H - W^t * A
+					\end{equation*}
+
+					In the first iteration the initial gradient (DLANGE), the subproblem
+					for $A, W, H$ (see \emph{pg\_subproblem}) and the root mean square
+					residual are calculated.\newline
+					Afterwards iteration two begins.\newline
+
+					In every ohter iteration first the new projection norm is calculated. (In 
+					Matlab-Notation: $norm([gradW(gradW <0 | W > 0); gradH(gradH <0 | H > 
+					0)])$) as a stopping criterion.\newline
+
+					For calculation of W the following steps are performed:\newline
+
+					\begin{itemize}
+					 \item Copy W to a temporary matrix (DLACPY)\newline
+					 \item Calculate $W_n = W_n -\alpha * gradW$ (DAXPY) where $\alpha$ is the 
+						stepsize\newline
+					 \item Set negative elements to zero (loop)\newline
+					\end{itemize}
+
+
+					For calculation of H the following steps are performed:\newline
+					
+					\begin{itemize}
+					 \item Copy H to a temporary matrix (DLACPY)\newline
+					 \item Calculate $H_n = H_n -\alpha * gradH$ (DAXPY) wheres $\alpha$ is 
+						the stepsize\newline
+					 \item Set negative elements to zero (loop)\newline
+					\end{itemize}
+
+					After these steps the search for the next stepsize begins with following
+					actions (loop):\newline
+
+					\begin{itemize}
+					 \item Decide whether to increase or decrease $\alpha$.\newline
+					 \item Calculate new matrices $W$ and $H$ (see former calculation of W and 
+						H)\newline
+					 \item Store the better one of the last two results.\newline
+					\end{itemize}
+
+
+					As the final step for every iteration the root mean square residual is
+					calculated.\newline
+
+
+		\subsection{pg\_subprob\_h}
+
+
+			\paragraph{Purpose}
+
+
+				
+					This routine solves a projected gradient subproblem for calculation of  the next iteration of \emph{H} as required by \emph{nmf\_alspg} and \emph{nmf\_pg} \newline
+
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+					The following routines are called\newline
+
+					\begin{tabular}{lcl}
+						DGEMM && for matrix-matrix multiplications\\
+						DLACPY && for copying matrices\\
+						DAXPY && for calculating y = a*x + y\\
+					\end{tabular}
+
+			\paragraph{Implementation outline}
+
+
+					First the help matrices
+
+					\begin{equation*}
+						WTA = W^t * A
+					\end{equation*}
+
+					and
+	
+					\begin{equation*}
+ 						WTW = W^t * W
+					\end{equation*}
+
+					get calculated (DGEMM).\newline
+
+
+					In every iteration then the new gradient $grad = WTW*H - WTA$ is
+					calculated (DLACPY and DGEMM)\newline
+
+					As a stopping criterion the projection norm is computed and an inner loop
+					for determining a step size ist entered.\newline
+					For determining the step size $H_n = max(H - \alpha * grad, 0)$ is
+					calculated and $\alpha$ gets updated based on the change from current $H$ 
+					to $H_n$. Depending on the update of $\alpha$ the next $H$ is chosen from
+					previous $H_p$ and next $H_n$ (DLACPY).\newline
+
+		\subsection{pg\_subprob\_w}
+
+			\paragraph{Purpose}
+				
+					This routine is a transposed version of routine \emph{pg\_subprob\_h} for reducing
+					computational time.\newline
+
+
+
+	\section{Auxiliary routines}
+
+
+		\subsection{calculateNorm}
+
+			\paragraph{Purpose}
+
+			Calculates the frobenius norm of matrix $ D = A-W*H$ which is then divided by $sqrt(m*n)$, 
+			where $m$ and $n$ are the matrix dimensions of $A$.
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+			The following routines are called\newline
+
+			\begin{tabular}{lcl}
+				DGEMM && for matrix-matrix multiplications\\
+				DLANGE && for computation of the frobenius norm\\
+				DLACPY && for copying a matrix\\
+			\end{tabular}
+
+			\paragraph{Implementation outline}
+
+			At first the matrix $D$ ist computed (DLACPY and DGEMM). Then the frobenius norm of this
+			matrix is calculated and divided by the squareroot of the number of its elements (DLANGE).
+
+
+		\subsection{calculateNorm\_singleprec}
+
+			\paragraph{Purpose}
+
+			This routine is a single precision version of \emph{calculateNorm} and uses single precision versions
+			of BLAS and LAPACK routines.
+
+
+		\subsection{calculateMaxchange}
+
+
+			\paragraph{Purpose}
+
+			Calculates the maximum change matrix w or h show from last iteration to the current 
+			iteration, which is used as one of the convergence checks in most implemented nmf algorithms.
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+			The following routines are called\newline
+
+			\begin{tabular}{lcl}
+				DLANGE && for computation of the frobenius norm\\
+				DAXPY && for addition of matrices\\
+			\end{tabular}
+
+			\paragraph{Implementation outline}
+
+			First the absolute maximum of the previous matrix is computed (DLANGE). Then the difference
+			of current and previous matrix is calculated (DAXPY).\newline
+
+			The function then returns the ratio of absolute maximum of the difference matrix (DLANGE) and
+			the absolute maximum of the previous matrix.\newline
+
+
+		\subsection{calculateMaxchange\_singleprec}
+
+
+			\paragraph{Purpose}
+
+			This routine is a single precision version of \emph{calculateMaxchange} and uses single precision version
+			of BLAS and LAPACK routines.
+
+
+		\subsection{loadMatrix}
+
+			\paragraph{Purpose}
+
+			Loads a matrix from the specified file and allocates memory according to the matrix dimensions
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+			Not used.
+
+			\paragraph{Implementation outline}
+
+			The file has to be a simple ascii file where the first row has exactly one entry which is the 
+			number of rows m and the second row has exactly one entry which is the number of columns n.
+ 			The next m rows contain the elements of the matrix in row-major-order where every element is 
+			separated by a single space.
+
+
+
+		\subsection{storeMatrix}
+
+			\paragraph{Purpose}
+
+			Stores a matrix from the specified file and allocates memory according to the matrix 
+			dimensions.
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+			Not used.
+
+			\paragraph{Implementation outline}
+
+			The file will be a simple ascii file where the first row has exactly one entry which is the 
+			number of rows m and the second row has exactly one entry which is the number of columns n.
+ 			The next m rows contain the elements of the matrix in row-major-order where every element is 
+			separated by a single space.
+
+
+		\subsection{generateMatrix}
+
+			\paragraph{Purpose}
+
+			Allocates memory for a matrix and initializes this matrix with random entries.
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+			Not used.
+
+			\paragraph{Implementation outline}
+
+			The memory will be allocated as a one-dimensional array and logically used in column-major 
+			order. Every element will then be set to a random value.
+			
+
+		\subsection{setdefaultopts}
+
+			\paragraph{Purpose}
+
+			If a null-pointer is passed to nmfDriver for the options-structure default values are used
+ 			wich this routine implements.
+
+			\paragraph{Used BLAS/LAPACK routines}
+
+			Not used.
+
+			\paragraph{Implementation outline}
+
+			The options structure contains following elements:\newline
+
+			\begin{tabular}{l|l|c}
+ 			 	element & description & default value\\
+				\hline
+ 				rep & number of repetitions & 1\\
+ 				init & method to use for initialising matrices & ran\\
+ 				min\_init & minimal value for random numbers & 0\\
+ 				max\_init & maximal value for random numbers & 1\\
+ 				w\_out & filename to store final matrix w in & "final\_w.matrix"\\
+ 				h\_out & filename to store final matrix h in & "final\_h.matrix"\\
+ 				TolX & tolerance limit for maxChange & 1E-04\\
+ 				TolFun & tolerance for root mean square residual & 1E-04\\
+			\end{tabular}
+
+\end{document}
